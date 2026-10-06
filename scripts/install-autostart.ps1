@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     로그온 시 Xbox 컨트롤러를 WSL 로 자동 포워딩하도록 예약 작업을 등록/해제합니다.
