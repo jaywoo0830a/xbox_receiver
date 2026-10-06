@@ -84,7 +84,7 @@ if ($pwshCmd) {
     $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 }
 
-$argList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -All -AutoAttach"
+$argList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -AutoAttach"
 if ($Distro) { $argList += " -Distro `"$Distro`"" }
 
 $action    = New-ScheduledTaskAction -Execute $exe -Argument $argList

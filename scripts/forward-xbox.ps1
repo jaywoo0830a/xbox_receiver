@@ -1,70 +1,71 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Xbox 컨트롤러를 찾아서 WSL2 로 포워딩(USB/IP)합니다.
+    usbipd 로 Xbox 컨트롤러를 WSL 로 포워딩합니다.  (list -> bind --force -> attach)
 
 .DESCRIPTION
-    usbipd-win (https://github.com/dorssel/usbipd-win) 을 감싸서:
-      1. Windows 에 연결된 Xbox 컨트롤러를 자동으로 찾습니다.
-      2. 공유(bind)되지 않았으면 공유합니다.  (관리자 권한 필요)
-      3. WSL2 배포판에 연결(attach)합니다.
+    다음 3단계 프로세스를 그대로 따릅니다.
 
-    usbipd-win 4.0.0 이상에서는 배포판 안에 별도 클라이언트 도구 설치가 필요 없습니다.
+        usbipd list                                # (1) BUSID 와 VID:PID 확인
+        usbipd bind   --busid <BUSID> --force      # (2) 최초 1회 (재부팅에도 유지)
+        usbipd attach --wsl --busid <BUSID>        # (3) 재연결/재부팅 후마다 (뽑았다 꽂으면 다시)
+
+    -BusId 를 생략하면 이름/벤더 ID 로 Xbox 컨트롤러를 자동 탐지합니다.
+    이미 Shared 이면 (2)를 건너뛰고, 이미 Attached 이면 (3)도 건너뜁니다.
 
 .PARAMETER BusId
-    이 버스 ID 를 가진 장치만 처리합니다. (예: "1-1")
+    대상 BUSID (예: "2-3"). 생략하면 Xbox 컨트롤러를 자동 탐지합니다.
 
 .PARAMETER Distro
-    연결 대상 WSL 배포판 이름. 생략하면 기본 배포판.
+    attach 대상 WSL 배포판. 생략하면 기본 배포판.
 
-.PARAMETER All
-    일치하는 모든 Xbox 컨트롤러를 처리합니다. (기본: 첫 번째 하나만)
-
-.PARAMETER Detach
-    연결(attach) 대신 해제(detach)합니다.
+.PARAMETER NoForce
+    bind 시 --force 를 사용하지 않습니다. (기본은 --force 사용)
 
 .PARAMETER AutoAttach
-    --auto-attach 로 연결하여 장치가 다시 꽂힐 때 자동 재연결되게 합니다.
+    attach 시 --auto-attach 를 추가합니다. (장치가 다시 꽂힐 때 자동 재연결)
 
-.PARAMETER List
-    찾기만 하고 공유/연결하지 않습니다.
+.PARAMETER Detach
+    attach 대신 detach 합니다.
+
+.PARAMETER Only
+    목록만 확인하고 bind/attach 는 하지 않습니다.
 
 .PARAMETER Filter
-    장치 이름에 대해 적용할 정규식. 기본값: 'xbox'
+    자동 탐지 시 장치 이름에 적용할 정규식. 기본값: 'xbox'
 
 .EXAMPLE
     .\forward-xbox.ps1
-    첫 번째로 찾은 Xbox 컨트롤러를 기본 배포판에 연결
+    Xbox 컨트롤러를 자동 탐지하여 bind --force 후 attach
 
 .EXAMPLE
-    .\forward-xbox.ps1 -List
-    찾기만 하고 종료 (안전한 확인용)
+    .\forward-xbox.ps1 -BusId 2-3
+    BUSID 2-3 을 지정하여 처리
 
 .EXAMPLE
-    .\forward-xbox.ps1 -All -AutoAttach
-    모든 Xbox 컨트롤러를 자동 재연결 옵션으로 연결
+    .\forward-xbox.ps1 -Only
+    usbipd list 만 확인
 
 .EXAMPLE
-    .\forward-xbox.ps1 -Detach
+    .\forward-xbox.ps1 -Detach -BusId 2-3
     연결 해제
 
 .EXAMPLE
-    .\forward-xbox.ps1 -BusId 1-1 -Distro Ubuntu-24.04
-    특정 버스 ID 를 특정 배포판에 연결
+    .\forward-xbox.ps1 -AutoAttach
+    자동 재연결 옵션으로 attach
 #>
 [CmdletBinding()]
 param(
     [string] $BusId,
     [string] $Distro,
-    [switch] $All,
-    [switch] $Detach,
+    [switch] $NoForce,
     [switch] $AutoAttach,
-    [switch] $List,
+    [switch] $Detach,
+    [switch] $Only,
     [string] $Filter = 'xbox'
 )
 
 $ErrorActionPreference = 'Stop'
-
 # usbipd 는 출력을 UTF-8 로 내보내므로, 캡처 시 한글 장치명이 깨지지 않도록 인코딩을 맞춘다.
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
@@ -82,6 +83,12 @@ function Test-Admin {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# 실제 실행되는 usbipd 명령을 화면에 보여주고 실행
+function Invoke-Usbipd {
+    param([string[]]$ArgList)
+    Write-Host ("    > usbipd " + ($ArgList -join ' ')) -ForegroundColor DarkGray
+    & usbipd @ArgList
+}
 
 # usbipd list 출력을 파싱해서 장치 객체 배열로 반환
 function Get-UsbipdDevices {
@@ -102,9 +109,10 @@ function Get-UsbipdDevices {
             } elseif ($rest -cmatch 'Not shared\s*$') {
                 $state = 'Not shared'
                 $name  = ($rest -replace '\s*Not shared\s*$', '').Trim()
-            } elseif ($rest -cmatch 'Shared\s*$') {
+            } elseif ($rest -cmatch 'Shared( \(forced\))?\s*$') {
+                # 'Shared' 또는 'Shared (forced)' 둘 다 공유 상태로 인식
                 $state = 'Shared'
-                $name  = ($rest -replace '\s*Shared\s*$', '').Trim()
+                $name  = ($rest -replace '\s*Shared( \(forced\))?\s*$', '').Trim()
             }
 
             $devices += [pscustomobject]@{
@@ -119,21 +127,6 @@ function Get-UsbipdDevices {
     return $devices
 }
 
-function Select-XboxDevices {
-    param($Devices, [string]$Filter, [string[]]$VendorIds)
-    $result = @()
-    foreach ($d in $Devices) {
-        $isXboxName = $d.Name -match $Filter
-        $isXboxVid  = $VendorIds -contains $d.Vid
-        if ($isXboxName -or $isXboxVid) {
-            $reason = if ($isXboxName) { 'name' } else { 'vid' }
-            $d | Add-Member -NotePropertyName MatchReason -NotePropertyValue $reason -Force
-            $result += $d
-        }
-    }
-    return $result
-}
-
 function Test-WslRunning {
     try {
         $wslOut = (& wsl.exe --list --verbose 2>&1) -replace "`0", ''
@@ -143,93 +136,94 @@ function Test-WslRunning {
     }
 }
 
-# ---------------- main ----------------
+
+# ================= main =================
 
 if (-not (Get-Command usbipd -ErrorAction SilentlyContinue)) {
     Write-Bad "usbipd 를 찾을 수 없습니다. 설치: winget install --exact dorssel.usbipd-win"
     exit 1
 }
 
-Write-Info "USB 장치 목록을 조회합니다..."
-# 주의: 변수명을 $all 로 하면 [switch] $All 파라미터와 (대소문자 무시) 충돌하므로 $usbDevices 사용
+# ---------- (1) 장치 확인 ----------
+Write-Info "(1) usbipd list  - BUSID 와 VID:PID 확인"
+& usbipd list
+Write-Host ""
+
 $usbDevices = @(Get-UsbipdDevices)
 
-$xbox = @(Select-XboxDevices -Devices $usbDevices -Filter $Filter -VendorIds $XboxVendorIds)
-
+# ---------- 대상 BUSID 결정 ----------
+$target = $null
 if ($BusId) {
-    $xbox = @($xbox | Where-Object { $_.BusId -eq $BusId })
+    $target = @($usbDevices | Where-Object { $_.BusId -eq $BusId })[0]
+    if (-not $target) {
+        Write-Warn "BUSID '$BusId' 를 목록에서 찾지 못했습니다. 그대로 진행합니다."
+        $target = [pscustomobject]@{ BusId = $BusId; VidPid = ''; Name = '(unknown)'; State = 'Unknown' }
+    }
+} else {
+    $xbox = @($usbDevices | Where-Object { ($_.Name -match $Filter) -or ($XboxVendorIds -contains $_.Vid) })
+    if ($xbox.Count -eq 0) {
+        Write-Warn "Xbox 컨트롤러를 찾지 못했습니다. -BusId 로 직접 지정하세요. (예: -BusId 2-3)"
+        exit 1
+    }
+    if ($xbox.Count -gt 1) {
+        Write-Warn ("Xbox 컨트롤러가 {0}개 있습니다. 첫 번째를 사용합니다. (다른 것을 쓰려면 -BusId)" -f $xbox.Count)
+    }
+    $target = @($xbox)[0]
 }
 
-if ($xbox.Count -eq 0) {
-    Write-Warn "Xbox 컨트롤러를 찾지 못했습니다. (이름 필터: '$Filter')"
-    Write-Host "`n현재 연결된 USB 장치 목록:" -ForegroundColor Gray
-    ($usbDevices | Format-Table BusId, VidPid, Name, State -AutoSize | Out-String).Trim() | Write-Host
+Write-Good ("대상: BUSID={0}  {1}  [{2}]" -f $target.BusId, $target.Name, $target.State)
+
+if ($Only) {
+    Write-Info "-Only 옵션: 조회만 하고 종료합니다."
     exit 0
 }
 
-Write-Good ("Xbox 컨트롤러 {0}개 발견:" -f $xbox.Count)
-($xbox | Format-Table BusId, VidPid, Name, State -AutoSize | Out-String).Trim() | Write-Host
-
-if ($List) {
-    Write-Info "-List 옵션: 조회만 하고 종료합니다."
+# ---------- detach 모드 ----------
+if ($Detach) {
+    Write-Info "(3') usbipd detach  - 연결 해제"
+    Invoke-Usbipd @('detach', '--busid', $target.BusId)
     exit 0
 }
 
-
-# 처리 대상 선택 (BusId 지정 > All > 첫 번째)
-$targets = if ($BusId) { $xbox } elseif ($All) { $xbox } else { @($xbox)[0] }
-
-$isAdmin = Test-Admin
-
-# attach 전에는 WSL2 VM 이 살아있어야 함
-if (-not $Detach) {
-    if (-not (Test-WslRunning)) {
-        Write-Warn "실행 중인 WSL 배포판이 없습니다. attach 전에 WSL 터미널을 열어 두세요."
-        Write-Warn "(WSL2 경량 VM 이 살아있어야 장치 연결이 유지됩니다.)"
+# ---------- (2) 최초 1회 bind (공유) ----------
+if ($target.State -eq 'Shared' -or $target.State -eq 'Attached') {
+    Write-Good "(2) 이미 공유(Shared)되어 있습니다. bind 를 건너뜁니다."
+} else {
+    $bindExtra = if ($NoForce) { '' } else { ' --force' }
+    if (-not (Test-Admin)) {
+        Write-Bad "(2) bind 는 관리자 권한이 필요합니다. 관리자 PowerShell 에서 아래를 실행하세요:"
+        Write-Host ("    usbipd bind --busid {0}{1}" -f $target.BusId, $bindExtra) -ForegroundColor White
+        exit 1
     }
-}
-
-foreach ($t in $targets) {
-    Write-Host ""
-    Write-Info ("대상: BUSID={0}  {1}  [{2}]" -f $t.BusId, $t.Name, $t.State)
-
-    if ($Detach) {
-        Write-Info "연결 해제: usbipd detach --busid $($t.BusId)"
-        & usbipd detach --busid $t.BusId
-        continue
-    }
-
-    # 1) 공유(bind) 단계 - 관리자 권한 필요
-    if ($t.State -eq 'Not shared') {
-        if (-not $isAdmin) {
-            Write-Bad "이 장치는 아직 공유되지 않았습니다. 관리자 권한 PowerShell 에서 먼저 실행하세요:"
-            Write-Host ("    usbipd bind --busid {0}" -f $t.BusId) -ForegroundColor White
-            continue
-        }
-        Write-Info "공유(bind) 중: usbipd bind --busid $($t.BusId)"
-        & usbipd bind --busid $t.BusId
-    }
-
-    # 2) 연결(attach) 단계
-    if ($t.State -eq 'Attached') {
-        Write-Good "이미 WSL 에 연결되어 있습니다. (건너뜀)"
-        continue
-    }
-
-    $attachArgs = @('attach', '--wsl')
-    if ($Distro)     { $attachArgs += @('--distribution', $Distro) }
-    if ($AutoAttach) { $attachArgs += '--auto-attach' }
-    $attachArgs += @('--busid', $t.BusId)
-
-    Write-Info ("연결(attach) 중: usbipd " + ($attachArgs -join ' '))
-    & usbipd @attachArgs
-
-    if ($LASTEXITCODE -eq 0) {
-        Write-Good "완료: $($t.BusId) -> WSL.  WSL 안에서 'lsusb' 로 확인하세요."
+    Write-Info "(2) usbipd bind  - 최초 1회 (재부팅에도 유지)"
+    if ($NoForce) {
+        Invoke-Usbipd @('bind', '--busid', $target.BusId)
     } else {
-        Write-Bad "attach 실패 (exit $LASTEXITCODE). 관리자 권한 / WSL 실행 여부를 확인하세요."
+        Invoke-Usbipd @('bind', '--busid', $target.BusId, '--force')
     }
 }
 
-Write-Host ""
-Write-Info "끝. WSL 에서 확인: lsusb"
+# ---------- (3) attach ----------
+if ($target.State -eq 'Attached') {
+    Write-Good "(3) 이미 WSL 에 연결(Attached)되어 있습니다. 건너뜁니다."
+    exit 0
+}
+
+if (-not (Test-WslRunning)) {
+    Write-Warn "실행 중인 WSL 배포판이 없습니다. attach 전에 WSL 터미널을 열어 두세요."
+    Write-Warn "(WSL2 경량 VM 이 살아있어야 연결이 유지됩니다.)"
+}
+
+$attachArgs = @('attach', '--wsl')
+if ($Distro)     { $attachArgs += @('--distribution', $Distro) }
+if ($AutoAttach) { $attachArgs += '--auto-attach' }
+$attachArgs += @('--busid', $target.BusId)
+
+Write-Info "(3) usbipd attach  - 재연결/재부팅 후마다 (뽑았다 꽂으면 다시)"
+Invoke-Usbipd $attachArgs
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Good "완료. WSL 안에서 'lsusb' 로 확인하세요."
+} else {
+    Write-Bad "attach 실패 (exit $LASTEXITCODE). 관리자 권한 / WSL 실행 여부를 확인하세요."
+}
