@@ -55,3 +55,42 @@ forward-xbox.cmd -All -AutoAttach
 - attach 전에 **WSL 터미널을 열어 두세요.** WSL2 경량 VM 이 살아있어야 연결이 유지됩니다.
 - 장치가 attach 된 동안에는 **Windows 에서 사용할 수 없습니다.** `-Detach` 로 해제하면 다시 Windows 에서 사용할 수 있습니다.
 - 연결 후 WSL 안에서 `lsusb` 로 확인할 수 있습니다.
+
+## 재부팅 후에도 유지되나요?
+
+| 단계 | 명령 | 재부팅 후 |
+|------|------|-----------|
+| 공유(share) | `usbipd bind --busid <id>` | ✅ **유지됨** (persistent) |
+| 연결(attach) | `usbipd attach --wsl --busid <id>` | ❌ **풀림** (다시 실행 필요) |
+
+공식 문서(usbipd-win README)에 따르면:
+> Sharing a device is persistent; it survives reboots.
+> Attaching devices to a client is non-persistent. You will have to re-attach after a reboot,
+> or when the device resets or is physically unplugged/replugged.
+
+즉, **공유(bind)는 재부팅 후에도 유지**되지만 **연결(attach)은 재부팅/장치 리셋/재연결 시 풀립니다.**
+`--auto-attach` 는 실행 중에 장치가 분리/재연결될 때 자동 재연결을 도와주지만, **Windows 재부팅 후에는 다시 attach 해야 합니다.**
+
+### 자동화: 로그온 시 자동 연결 (`install-autostart.ps1`)
+
+재부팅 후에도 자동으로 다시 연결되게 하려면 로그온 시 실행되는 예약 작업을 등록합니다.
+
+```powershell
+# 등록될 내용 미리 보기
+.\install-autostart.ps1 -WhatIf
+
+# 로그온 시 자동 실행 등록
+.\install-autostart.ps1
+
+# 특정 배포판 지정
+.\install-autostart.ps1 -Distro Ubuntu-24.04
+
+# 해제
+.\install-autostart.ps1 -Remove
+```
+
+등록되는 작업은 로그온 시 `forward-xbox.ps1 -All -AutoAttach` 를 실행합니다.
+(스크립트가 버스 ID 를 자동 탐지하므로 재부팅으로 BUSID 가 바뀌어도 동작합니다.)
+
+> 주의: attach 전에 WSL2 VM 이 실행 중이어야 합니다. 로그온 직후 WSL 이 자동 시작되지 않는다면,
+> WSL 터미널을 함께 열어 두거나 별도의 시작 프로그램으로 WSL 을 띄워 두세요.
