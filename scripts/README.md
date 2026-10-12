@@ -57,12 +57,25 @@ forward-xbox.cmd -BusId 2-3
 | `-Distro <name>` | 연결 대상 WSL 배포판 (기본: 기본 배포판) |
 | `-NoForce` | bind 시 `--force` 를 사용하지 않음 (기본은 `--force`) |
 | `-AutoAttach` | attach 시 `--auto-attach` 추가 (다시 꽂힐 때 자동 재연결) |
-| `-Detach` | 연결 대신 해제 |
+| `-Detach` | 연결만 해제 (`usbipd detach`) |
+| `-Unbind` | 공유 해제 (`usbipd unbind`, 관리자 권한 필요) |
 | `-Only` | 조회만 하고 종료 (bind/attach 안 함) |
 | `-Filter <regex>` | 자동 탐지 시 장치 이름 필터 정규식 (기본: `xbox`) |
 
+### 연결 해제 / 공유 해제
+
+| 하고 싶은 것 | 명령 | 비고 |
+|--------------|------|------|
+| 연결만 끊기 | `usbipd detach --busid 1-1` | `--force` 로 공유했다면 Windows 로 안 돌아옴 |
+| 공유 해제 | `usbipd unbind --busid 1-1` | 연결돼 있으면 자동 detach, Windows 에서 다시 사용 가능 (**관리자 권한 필요**) |
+| 모든 공유 해제 | `usbipd unbind --all` | **관리자 권한 필요** |
+
+- `--force` 없이 bind 했다면 `detach` 만으로도 Windows 에서 다시 사용할 수 있습니다.
+- `--force` 로 bind 했다면 `detach` 만으로는 Windows 로 안 돌아오므로 **`unbind` 가 필요**합니다.
+- 스크립트로도 가능: `.\forward-xbox.ps1 -Detach` (연결만) / `.\forward-xbox.ps1 -Unbind` (공유 해제, 관리자)
+
 ### 주의사항
-- `usbipd bind` 단계는 **관리자 권한**이 필요합니다. 관리자 권한이 없으면 스크립트가 필요한 명령을 안내합니다.
+- `usbipd bind` / `usbipd unbind` 단계는 **관리자 권한**이 필요합니다. 관리자 권한이 없으면 스크립트가 필요한 명령을 안내합니다.
 - 기본적으로 `bind --force` 를 사용하므로, 공유하는 즉시 **Windows 에서는 그 장치를 사용할 수 없습니다.** (`--force` 없이 하려면 `-NoForce`)
 - attach 전에 **WSL 터미널을 열어 두세요.** WSL2 경량 VM 이 살아있어야 연결이 유지됩니다.
 - 장치가 attach 된 동안에는 **Windows 에서 사용할 수 없습니다.** `-Detach` 로 해제하면 다시 Windows 에서 사용할 수 있습니다.

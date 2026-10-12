@@ -26,7 +26,11 @@
     attach 시 --auto-attach 를 추가합니다. (장치가 다시 꽂힐 때 자동 재연결)
 
 .PARAMETER Detach
-    attach 대신 detach 합니다.
+    attach 대신 detach 합니다. (연결만 끊음)
+
+.PARAMETER Unbind
+    공유를 해제합니다 (usbipd unbind). 연결돼 있으면 자동 detach 되고 Windows 에서 다시 사용할 수 있습니다.
+    (관리자 권한 필요)
 
 .PARAMETER Only
     목록만 확인하고 bind/attach 는 하지 않습니다.
@@ -48,7 +52,11 @@
 
 .EXAMPLE
     .\forward-xbox.ps1 -Detach -BusId 2-3
-    연결 해제
+    연결만 해제 (attach 연결 끊기)
+
+.EXAMPLE
+    .\forward-xbox.ps1 -Unbind -BusId 2-3
+    공유 해제 (관리자 권한 필요, Windows 에서 다시 사용 가능)
 
 .EXAMPLE
     .\forward-xbox.ps1 -AutoAttach
@@ -61,6 +69,7 @@ param(
     [switch] $NoForce,
     [switch] $AutoAttach,
     [switch] $Detach,
+    [switch] $Unbind,
     [switch] $Only,
     [string] $Filter = 'xbox'
 )
@@ -178,9 +187,21 @@ if ($Only) {
     exit 0
 }
 
-# ---------- detach 모드 ----------
+# ---------- 해제 모드 (detach / unbind) ----------
+if ($Unbind) {
+    # unbind: 공유 해제. 연결돼 있으면 자동 detach 되고 Windows 에서 다시 사용 가능. (관리자 권한 필요)
+    if (-not (Test-Admin)) {
+        Write-Bad "unbind 는 관리자 권한이 필요합니다. 관리자 PowerShell 에서 실행하세요:"
+        Write-Host ("    usbipd unbind --busid {0}" -f $target.BusId) -ForegroundColor White
+        exit 1
+    }
+    Write-Info "(해제) usbipd unbind  - 공유 해제 (연결돼 있으면 자동 detach, Windows 에 반환)"
+    Invoke-Usbipd @('unbind', '--busid', $target.BusId)
+    exit 0
+}
+
 if ($Detach) {
-    Write-Info "(3') usbipd detach  - 연결 해제"
+    Write-Info "(해제) usbipd detach  - 연결 해제 (--force 공유였다면 Windows 로 안 돌아옴 -> unbind 필요)"
     Invoke-Usbipd @('detach', '--busid', $target.BusId)
     exit 0
 }
