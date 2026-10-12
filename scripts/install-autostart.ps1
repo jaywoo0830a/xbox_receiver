@@ -62,21 +62,44 @@ if (-not (Test-Path $scriptPath)) {
 
 # --- 제거 모드 ---
 if ($Remove) {
-    $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    if (-not $existing) {
+    # (a) 지정한 이름으로 찾고,
+    # (b) 과거 오타(예: '--Remove') 등으로 등록된 잔여 작업까지 함께 정리하기 위해
+    #     이 스크립트(forward-xbox.ps1)를 실행하는 모든 예약 작업을 찾는다.
+    $byName   = @(Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
+    $byScript = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+        $t = $_
+        @($t.Actions | Where-Object { $_.Arguments -like '*forward-xbox.ps1*' }).Count -gt 0
+    })
+
+    $targets = @{}
+    foreach ($t in @($byName) + @($byScript)) {
+        $targets["$($t.TaskPath)$($t.TaskName)"] = $t
+    }
+
+    if ($targets.Count -eq 0) {
         Write-Warn "예약 작업 '$TaskName' 이(가) 없습니다. (제거할 것 없음)"
         exit 0
     }
-    if ($WhatIf) {
-        Write-Info "[WhatIf] 예약 작업 '$TaskName' 을(를) 제거합니다."
-        exit 0
+
+    foreach ($key in ($targets.Keys | Sort-Object)) {
+        $t = $targets[$key]
+        if ($WhatIf) {
+            Write-Info "[WhatIf] 예약 작업 '$key' 을(를) 제거합니다."
+            continue
+        }
+        Unregister-ScheduledTask -TaskName $t.TaskName -TaskPath $t.TaskPath -Confirm:$false
+        Write-Good "예약 작업 '$key' 을(를) 제거했습니다."
     }
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-    Write-Good "예약 작업 '$TaskName' 을(를) 제거했습니다."
     exit 0
 }
 
 # --- 등록 모드 ---
+# TaskName 이 '-' 로 시작하면 실수 가능성이 높다 (예: '--Remove' 를 옵션 대신 이름으로 넘김).
+if ($TaskName.StartsWith('-')) {
+    Write-Bad "예약 작업 이름 '$TaskName' 이(가) 올바르지 않습니다. (이름은 '-' 로 시작할 수 없습니다)"
+    Write-Warn "옵션을 잘못 전달하셨나요? 제거하려면 '-Remove' (하이픈 1개)를 사용하세요."
+    exit 1
+}
 $pwshCmd = Get-Command pwsh -ErrorAction SilentlyContinue
 if ($pwshCmd) {
     $exe = $pwshCmd.Source
